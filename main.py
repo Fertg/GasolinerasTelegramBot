@@ -4,7 +4,7 @@ import json
 import requests
 import logging
 import unicodedata
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup # Añadido
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler, filters,
     ConversationHandler, ContextTypes
@@ -54,18 +54,25 @@ def obtener_top_3(ciudad):
 
     for g in datos:
         try:
+            # Algunas gasolineras pueden tener la ciudad en un formato diferente,
+            # o pueden faltar datos de precio o coordenadas.
+            # Se normaliza el municipio de la gasolinera para una mejor coincidencia.
             if ciudad in normalizar(g["Municipio"]):
+                # Reemplazar ',' por '.' para que float pueda parsear los precios correctamente
                 diesel = float(g["Precio Gasoleo A"].replace(",", "."))
                 gasolina = float(g["Precio Gasolina 95 E5"].replace(",", "."))
+                
                 g["diesel"] = diesel
                 g["gasolina"] = gasolina
                 filtradas.append(g)
-        except:
+        except (ValueError, KeyError):
+            # Ignorar gasolineras con datos incompletos o malformados
             continue
 
     if not filtradas:
         return None, "⚠️ No se encontraron gasolineras en esa ciudad."
 
+    # Ordenar y obtener el top 3
     top_diesel = sorted(filtradas, key=lambda x: x["diesel"])[:3]
     top_gasolina = sorted(filtradas, key=lambda x: x["gasolina"])[:3]
 
@@ -93,15 +100,41 @@ async def recibir_ciudad(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
     top_diesel, top_gasolina = resultado
+    full_keyboard = [] # Lista para almacenar todos los botones
+
     msg = f"⛽ *Top 3 Diésel en {ciudad.title()}*\n"
-    for g in top_diesel:
-        msg += f"• {g['Rótulo']} - {g['diesel']} €\n  📍 {g['Dirección']}\n"
+    for i, g in enumerate(top_diesel):
+        try:
+            # Asegúrate de que las coordenadas sean strings y reemplaza la coma por punto para float
+            lat = float(g["Latitud"].replace(",", "."))
+            lon = float(g["Longitud (WGS84)"].replace(",", "."))
+            # Construye la URL de Google Maps
+            Maps_url = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
+            
+            msg += f"• {g['Rótulo']} - {g['diesel']} €\n  📍 {g['Dirección']}\n"
+            # Añade el botón a la lista de botones. Cada lista interna representa una fila de botones.
+            full_keyboard.append([InlineKeyboardButton(f"📍 {g['Rótulo']} (Diésel)", url=Maps_url)])
+        except (ValueError, KeyError):
+            # En caso de que las coordenadas falten o estén mal, no añadir botón
+            msg += f"• {g['Rótulo']} - {g['diesel']} €\n  📍 {g['Dirección']} (Coordenadas no disponibles)\n"
 
     msg += f"\n⛽ *Top 3 Gasolina 95 en {ciudad.title()}*\n"
-    for g in top_gasolina:
-        msg += f"• {g['Rótulo']} - {g['gasolina']} €\n  📍 {g['Dirección']}\n"
+    for i, g in enumerate(top_gasolina):
+        try:
+            lat = float(g["Latitud"].replace(",", "."))
+            lon = float(g["Longitud (WGS84)"].replace(",", "."))
+            Maps_url = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
+            
+            msg += f"• {g['Rótulo']} - {g['gasolina']} €\n  📍 {g['Dirección']}\n"
+            full_keyboard.append([InlineKeyboardButton(f"📍 {g['Rótulo']} (Gasolina)", url=Maps_url)])
+        except (ValueError, KeyError):
+            msg += f"• {g['Rótulo']} - {g['gasolina']} €\n  📍 {g['Dirección']} (Coordenadas no disponibles)\n"
 
-    await update.message.reply_text(msg, parse_mode="Markdown")
+    # Crea el objeto InlineKeyboardMarkup con todos los botones
+    reply_markup = InlineKeyboardMarkup(full_keyboard)
+
+    # Envía el mensaje con los precios y los botones
+    await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=reply_markup)
     return ConversationHandler.END
 
 async def cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -120,6 +153,7 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("start", start))
     app.add_handler(conv_handler)
 
+    # Configuración para Webhook (ideal para despliegue en plataformas como Railway)
     app.run_webhook(
         listen="0.0.0.0",
         port=int(os.environ.get("PORT", 8080)),
