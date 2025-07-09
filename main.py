@@ -4,11 +4,8 @@ import json
 import requests
 import logging
 import unicodedata
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup # Añadido
-from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler, filters,
-    ConversationHandler, ContextTypes
-)
+import math # Para el cálculo de distancia
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Location
 
 # Configuración básica
 TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -54,11 +51,7 @@ def obtener_top_3(ciudad):
 
     for g in datos:
         try:
-            # Algunas gasolineras pueden tener la ciudad en un formato diferente,
-            # o pueden faltar datos de precio o coordenadas.
-            # Se normaliza el municipio de la gasolinera para una mejor coincidencia.
             if ciudad in normalizar(g["Municipio"]):
-                # Reemplazar ',' por '.' para que float pueda parsear los precios correctamente
                 diesel = float(g["Precio Gasoleo A"].replace(",", "."))
                 gasolina = float(g["Precio Gasolina 95 E5"].replace(",", "."))
                 
@@ -66,17 +59,33 @@ def obtener_top_3(ciudad):
                 g["gasolina"] = gasolina
                 filtradas.append(g)
         except (ValueError, KeyError):
-            # Ignorar gasolineras con datos incompletos o malformados
             continue
 
     if not filtradas:
         return None, "⚠️ No se encontraron gasolineras en esa ciudad."
 
-    # Ordenar y obtener el top 3
     top_diesel = sorted(filtradas, key=lambda x: x["diesel"])[:3]
     top_gasolina = sorted(filtradas, key=lambda x: x["gasolina"])[:3]
 
     return (top_diesel, top_gasolina), None
+
+# Función para calcular la distancia Haversine entre dos puntos (lat, lon)
+def haversine(lat1, lon1, lat2, lon2):
+    R = 6371  # Radio de la Tierra en kilómetros
+
+    lat1_rad = math.radians(lat1)
+    lon1_rad = math.radians(lon1)
+    lat2_rad = math.radians(lat2)
+    lon2_rad = math.radians(lon2)
+
+    dlon = lon2_rad - lon1_rad
+    dlat = lat2_rad - lat1_rad
+
+    a = math.sin(dlat / 2)**2 + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon / 2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+    distance = R * c
+    return distance
 
 # Comandos del bot
 
@@ -88,7 +97,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def precio(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📍 ¿Qué ciudad quieres consultar?")
+    # ¡Aquí está el cambio!
+    await update.message.reply_text("📍 ¿Qué ciudad quieres consultar? O si lo prefieres, ¡envíame tu ubicación actual!")
     return ESPERANDO_CIUDAD
 
 async def recibir_ciudad(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -100,22 +110,18 @@ async def recibir_ciudad(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
     top_diesel, top_gasolina = resultado
-    full_keyboard = [] # Lista para almacenar todos los botones
+    full_keyboard = []
 
     msg = f"⛽ *Top 3 Diésel en {ciudad.title()}*\n"
     for i, g in enumerate(top_diesel):
         try:
-            # Asegúrate de que las coordenadas sean strings y reemplaza la coma por punto para float
             lat = float(g["Latitud"].replace(",", "."))
             lon = float(g["Longitud (WGS84)"].replace(",", "."))
-            # Construye la URL de Google Maps
             Maps_url = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
             
             msg += f"• {g['Rótulo']} - {g['diesel']} €\n  📍 {g['Dirección']}\n"
-            # Añade el botón a la lista de botones. Cada lista interna representa una fila de botones.
             full_keyboard.append([InlineKeyboardButton(f"📍 {g['Rótulo']} (Diésel)", url=Maps_url)])
         except (ValueError, KeyError):
-            # En caso de que las coordenadas falten o estén mal, no añadir botón
             msg += f"• {g['Rótulo']} - {g['diesel']} €\n  📍 {g['Dirección']} (Coordenadas no disponibles)\n"
 
     msg += f"\n⛽ *Top 3 Gasolina 95 en {ciudad.title()}*\n"
@@ -130,12 +136,81 @@ async def recibir_ciudad(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except (ValueError, KeyError):
             msg += f"• {g['Rótulo']} - {g['gasolina']} €\n  📍 {g['Dirección']} (Coordenadas no disponibles)\n"
 
-    # Crea el objeto InlineKeyboardMarkup con todos los botones
     reply_markup = InlineKeyboardMarkup(full_keyboard)
 
-    # Envía el mensaje con los precios y los botones
     await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=reply_markup)
     return ConversationHandler.END
+
+async def recibir_ubicacion(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_location = update.message.location
+    user_lat = user_location.latitude
+    user_lon = user_location.longitude
+
+    await update.message.reply_text("🔎 Buscando gasolineras cercanas a tu ubicación...")
+
+    descargar_si_es_necesario()
+
+    try:
+        with open(CACHE_FILE, encoding="utf-8") as f:
+            datos = json.load(f)["ListaEESSPrecio"]
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error al leer los datos de gasolineras: {e}")
+        return ConversationHandler.END
+
+    gasolineras_cercanas = []
+
+    for g in datos:
+        try:
+            gas_lat = float(g["Latitud"].replace(",", "."))
+            gas_lon = float(g["Longitud (WGS84)"].replace(",", "."))
+
+            dist = haversine(user_lat, user_lon, gas_lat, gas_lon)
+
+            if dist <= 20: # Filtrar gasolineras en un radio de 20 km
+                diesel = float(g["Precio Gasoleo A"].replace(",", "."))
+                gasolina = float(g["Precio Gasolina 95 E5"].replace(",", "."))
+                g["diesel"] = diesel
+                g["gasolina"] = gasolina
+                g["distancia"] = dist
+                gasolineras_cercanas.append(g)
+        except (ValueError, KeyError):
+            continue
+
+    if not gasolineras_cercanas:
+        await update.message.reply_text("⚠️ No se encontraron gasolineras en un radio de 20 km. Prueba a especificar una ciudad con /precio.")
+        return ConversationHandler.END
+
+    top_diesel = sorted(gasolineras_cercanas, key=lambda x: (x["diesel"], x["distancia"]))[:3]
+    top_gasolina = sorted(gasolineras_cercanas, key=lambda x: (x["gasolina"], x["distancia"]))[:3]
+
+    full_keyboard = []
+    msg = f"⛽ *Top 3 Diésel cerca de ti*\n"
+    for g in top_diesel:
+        try:
+            lat = float(g["Latitud"].replace(",", "."))
+            lon = float(g["Longitud (WGS84)"].replace(",", "."))
+            Maps_url = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
+            msg += f"• {g['Rótulo']} - {g['diesel']} € ({g['distancia']:.2f} km)\n  📍 {g['Dirección']}\n"
+            full_keyboard.append([InlineKeyboardButton(f"📍 {g['Rótulo']} (Diésel)", url=Maps_url)])
+        except (ValueError, KeyError):
+            msg += f"• {g['Rótulo']} - {g['diesel']} € ({g['distancia']:.2f} km)\n  📍 {g['Dirección']} (Coordenadas no disponibles)\n"
+
+
+    msg += f"\n⛽ *Top 3 Gasolina 95 cerca de ti*\n"
+    for g in top_gasolina:
+        try:
+            lat = float(g["Latitud"].replace(",", "."))
+            lon = float(g["Longitud (WGS84)"].replace(",", "."))
+            Maps_url = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
+            msg += f"• {g['Rótulo']} - {g['gasolina']} € ({g['distancia']:.2f} km)\n  📍 {g['Dirección']}\n"
+            full_keyboard.append([InlineKeyboardButton(f"📍 {g['Rótulo']} (Gasolina)", url=Maps_url)])
+        except (ValueError, KeyError):
+            msg += f"• {g['Rótulo']} - {g['gasolina']} € ({g['distancia']:.2f} km)\n  📍 {g['Dirección']} (Coordenadas no disponibles)\n"
+
+    reply_markup = InlineKeyboardMarkup(full_keyboard)
+    await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=reply_markup)
+    return ConversationHandler.END
+
 
 async def cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Consulta cancelada.")
@@ -146,14 +221,18 @@ if __name__ == "__main__":
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("precio", precio)],
-        states={ESPERANDO_CIUDAD: [MessageHandler(filters.TEXT & ~filters.COMMAND, recibir_ciudad)]},
+        states={
+            ESPERANDO_CIUDAD: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, recibir_ciudad),
+                MessageHandler(filters.LOCATION, recibir_ubicacion)
+            ]
+        },
         fallbacks=[CommandHandler("cancelar", cancelar)],
     )
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(conv_handler)
 
-    # Configuración para Webhook (ideal para despliegue en plataformas como Railway)
     app.run_webhook(
         listen="0.0.0.0",
         port=int(os.environ.get("PORT", 8080)),
