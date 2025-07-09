@@ -1,4 +1,2 @@
 python-telegram-bot[webhooks]==20.7
 requests
-h11==0.14.0
-tornado==6.4.2
