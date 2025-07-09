@@ -1,22 +1,14 @@
+import os
 from telegram import Update
 from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    filters,
-    ConversationHandler,
-    ContextTypes
+    ApplicationBuilder, CommandHandler, MessageHandler,
+    filters, ConversationHandler, ContextTypes
 )
 import requests
-import os
 
-# Estados para la conversación
 PEDIR_CIUDAD = 1
-
-# URL del Ministerio
 URL = "https://geoportalgasolineras.es/rest/geoportalgasolineras/ListaPrecioGasolinerasSinGalp"
 
-# Función que obtiene el top 3 de gasolineras por ciudad
 def obtener_top_3(ciudad: str):
     try:
         res = requests.get(URL, timeout=10)
@@ -44,12 +36,10 @@ def obtener_top_3(ciudad: str):
     except Exception as e:
         return None, str(e)
 
-# /start: inicia la conversación preguntando ciudad
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👋 ¡Hola! ¿De qué ciudad o pueblo quieres saber el precio del combustible?")
     return PEDIR_CIUDAD
 
-# Usuario responde con ciudad
 async def recibir_ciudad(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ciudad = update.message.text
     top, error = obtener_top_3(ciudad)
@@ -71,14 +61,15 @@ async def recibir_ciudad(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     return ConversationHandler.END
 
-# Permite cancelar con /cancelar
 async def cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Operación cancelada.")
     return ConversationHandler.END
 
-# Código principal del bot
 if __name__ == "__main__":
     TOKEN = os.getenv("TELEGRAM_TOKEN")
+    # URL público que Railway te dará al desplegar
+    WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # ejemplo: https://tu-app.railway.app/
+
     app = ApplicationBuilder().token(TOKEN).build()
 
     conv_handler = ConversationHandler(
@@ -86,8 +77,13 @@ if __name__ == "__main__":
         states={PEDIR_CIUDAD: [MessageHandler(filters.TEXT & ~filters.COMMAND, recibir_ciudad)]},
         fallbacks=[CommandHandler("cancelar", cancelar)],
     )
-
     app.add_handler(conv_handler)
 
-    print("✅ Bot activo...")
-    app.run_polling()
+    # Inicia webhook (puerto y ruta por defecto)
+    print("🚀 Iniciando webhook...")
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=int(os.environ.get("PORT", "8080")),
+        url_path=TOKEN,
+        webhook_url=f"{WEBHOOK_URL}{TOKEN}"
+    )
