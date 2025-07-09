@@ -75,7 +75,7 @@ def obtener_top_3(ciudad):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 ¡Bienvenido al bot de precios de gasolina!\n\n"
+        "👋 ¡Bienvenido al bot de precios de gasolina ⛽!\n\n"
         "Usa /precio para consultar el precio más barato en tu ciudad.\n"
         "Escribe /cancelar para salir de la búsqueda."
     )
