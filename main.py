@@ -3,6 +3,7 @@ import time
 import json
 import requests
 import logging
+import unicodedata
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler, filters,
@@ -19,8 +20,14 @@ URL_API = "https://sedeaplicaciones.minetur.gob.es/ServiciosRESTCarburantes/Prec
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Estados del bot
 ESPERANDO_CIUDAD = range(1)
+
+def normalizar(texto):
+    # Elimina tildes y pone en minúsculas
+    return ''.join(
+        c for c in unicodedata.normalize('NFD', texto)
+        if unicodedata.category(c) != 'Mn'
+    ).lower()
 
 def descargar_si_es_necesario():
     if not os.path.exists(CACHE_FILE) or (time.time() - os.path.getmtime(CACHE_FILE)) > CACHE_TIEMPO:
@@ -42,12 +49,12 @@ def obtener_top_3(ciudad):
     except Exception as e:
         return None, f"❌ Error al leer los datos: {e}"
 
-    ciudad = ciudad.strip().lower()
+    ciudad = normalizar(ciudad.strip())
     filtradas = []
 
     for g in datos:
         try:
-            if ciudad in g["Municipio"].lower():
+            if ciudad in normalizar(g["Municipio"]):
                 diesel = float(g["Precio Gasoleo A"].replace(",", "."))
                 gasolina = float(g["Precio Gasolina 95 E5"].replace(",", "."))
                 g["diesel"] = diesel
@@ -101,7 +108,6 @@ async def cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Consulta cancelada.")
     return ConversationHandler.END
 
-# Inicio de la aplicación
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TOKEN).build()
 
