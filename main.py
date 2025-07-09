@@ -1,55 +1,51 @@
-import logging
 import os
 import time
+import json
 import requests
+import logging
 from telegram import Update
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler, ConversationHandler,
-    ContextTypes, filters
+    ApplicationBuilder, CommandHandler, MessageHandler, filters,
+    ConversationHandler, ContextTypes
 )
 
-# 🔐 Configuración
+# Configuración básica
 TOKEN = os.getenv("TELEGRAM_TOKEN")
-URL = "https://geoportalgasolineras.es/rest/geoportalgasolineras/ListaPrecioGasolinerasSinGalp"
-
-# 🧠 Cache de datos
-gasolineras_cache = None
-ultimo_update = 0
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Ej: https://tubot.up.railway.app/
+CACHE_FILE = "gasolineras.json"
 CACHE_TIEMPO = 6 * 60 * 60  # 6 horas
+URL_API = "https://sedeaplicaciones.minetur.gob.es/ServiciosRESTCarburantes/PreciosCarburantes/EstacionesTerrestres/"
 
-# 🤖 Configurar logs
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# 🟦 Estados de la conversación
+# Estados del bot
 ESPERANDO_CIUDAD = range(1)
 
-# 📦 Descargar y cachear datos
-def actualizar_cache():
-    global gasolineras_cache, ultimo_update
-    headers = {"User-Agent": "Mozilla/5.0 (TelegramGasBot/1.0)"}
-    try:
-        r = requests.get(URL, headers=headers, timeout=10)
-        if r.status_code == 200:
-            gasolineras_cache = r.json().get("ListaEESSPrecio", [])
-            ultimo_update = time.time()
-            print("✅ Datos actualizados")
-        else:
-            print(f"⚠️ Error HTTP: {r.status_code}")
-    except Exception as e:
-        print("❌ Excepción al obtener datos:", e)
+def descargar_si_es_necesario():
+    if not os.path.exists(CACHE_FILE) or (time.time() - os.path.getmtime(CACHE_FILE)) > CACHE_TIEMPO:
+        try:
+            logger.info("⛽ Descargando datos actualizados de gasolineras...")
+            r = requests.get(URL_API, timeout=10)
+            r.raise_for_status()
+            with open(CACHE_FILE, "w", encoding="utf-8") as f:
+                json.dump(r.json(), f, ensure_ascii=False, indent=2)
+            logger.info("✅ Datos guardados.")
+        except Exception as e:
+            logger.error(f"❌ Error al descargar los datos: {e}")
 
-# 🔍 Obtener top 3
 def obtener_top_3(ciudad):
-    global gasolineras_cache, ultimo_update
-    if gasolineras_cache is None or time.time() - ultimo_update > CACHE_TIEMPO:
-        actualizar_cache()
-    if gasolineras_cache is None:
-        return None, "Error al obtener datos."
+    descargar_si_es_necesario()
+    try:
+        with open(CACHE_FILE, encoding="utf-8") as f:
+            datos = json.load(f)["ListaEESSPrecio"]
+    except Exception as e:
+        return None, f"❌ Error al leer los datos: {e}"
 
     ciudad = ciudad.strip().lower()
     filtradas = []
 
-    for g in gasolineras_cache:
+    for g in datos:
         try:
             if ciudad in g["Municipio"].lower():
                 diesel = float(g["Precio Gasoleo A"].replace(",", "."))
@@ -61,34 +57,32 @@ def obtener_top_3(ciudad):
             continue
 
     if not filtradas:
-        return None, "No se encontraron gasolineras en esa ciudad."
+        return None, "⚠️ No se encontraron gasolineras en esa ciudad."
 
     top_diesel = sorted(filtradas, key=lambda x: x["diesel"])[:3]
     top_gasolina = sorted(filtradas, key=lambda x: x["gasolina"])[:3]
 
     return (top_diesel, top_gasolina), None
 
-# 🟩 /start
+# Comandos del bot
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 ¡Bienvenido al Bot de Gasolineras!\n\n"
-        "Puedes usar estos comandos:\n"
-        "• /precio – Ver el top 3 de gasolineras más baratas\n"
-        "• /cancelar – Cancelar la consulta actual"
+        "👋 ¡Bienvenido al bot de precios de gasolina!\n\n"
+        "Usa /precio para consultar el precio más barato en tu ciudad.\n"
+        "Escribe /cancelar para salir de la búsqueda."
     )
 
-# ⛽ /precio
 async def precio(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📍 Escribe el nombre de la ciudad o pueblo:")
+    await update.message.reply_text("📍 ¿Qué ciudad quieres consultar?")
     return ESPERANDO_CIUDAD
 
-# 📍 Recibir ciudad
 async def recibir_ciudad(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ciudad = update.message.text
     resultado, error = obtener_top_3(ciudad)
 
     if error:
-        await update.message.reply_text(f"⚠️ {error}")
+        await update.message.reply_text(error)
         return ConversationHandler.END
 
     top_diesel, top_gasolina = resultado
@@ -103,12 +97,11 @@ async def recibir_ciudad(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg, parse_mode="Markdown")
     return ConversationHandler.END
 
-# 🚫 /cancelar
 async def cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🚫 Consulta cancelada.")
+    await update.message.reply_text("❌ Consulta cancelada.")
     return ConversationHandler.END
 
-# 🚀 Main
+# Inicio de la aplicación
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TOKEN).build()
 
@@ -121,12 +114,9 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("start", start))
     app.add_handler(conv_handler)
 
-    # 🟢 Ejecutar por webhook (Railway)
-    WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # ej. https://tuapp.up.railway.app/
-    print("🧷 Webhook:", f"{WEBHOOK_URL}{TOKEN}")
     app.run_webhook(
         listen="0.0.0.0",
         port=int(os.environ.get("PORT", 8080)),
         url_path=TOKEN,
-        webhook_url=f"{WEBHOOK_URL}{TOKEN}",
+        webhook_url=f"{WEBHOOK_URL}{TOKEN}"
     )
