@@ -336,4 +336,4 @@ if __name__ == "__main__":
         url_path=TOKEN,
         webhook_url=f"{WEBHOOK_URL}{TOKEN}"
     )
-    logger.info("Aplicación Telegram Bot iniciada y escuchando por webhooks.")
+    logger.info("Aplicación Telegram Bot iniciada y escuchando por webhooks. ")
