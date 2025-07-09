@@ -4,12 +4,16 @@ import json
 import requests
 import logging
 import unicodedata
-import math # Para el cálculo de distancia
+import math
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Location
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler, MessageHandler, filters,
+    ConversationHandler, ContextTypes # <--- Importación corregida
+)
 
 # Configuración básica
 TOKEN = os.getenv("TELEGRAM_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Ej: https://tubot.up.railway.app/
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 CACHE_FILE = "gasolineras.json"
 CACHE_TIEMPO = 6 * 60 * 60  # 6 horas
 URL_API = "https://sedeaplicaciones.minetur.gob.es/ServiciosRESTCarburantes/PreciosCarburantes/EstacionesTerrestres/"
@@ -20,7 +24,6 @@ logger = logging.getLogger(__name__)
 ESPERANDO_CIUDAD = range(1)
 
 def normalizar(texto):
-    # Elimina tildes y pone en minúsculas
     return ''.join(
         c for c in unicodedata.normalize('NFD', texto)
         if unicodedata.category(c) != 'Mn'
@@ -69,9 +72,8 @@ def obtener_top_3(ciudad):
 
     return (top_diesel, top_gasolina), None
 
-# Función para calcular la distancia Haversine entre dos puntos (lat, lon)
 def haversine(lat1, lon1, lat2, lon2):
-    R = 6371  # Radio de la Tierra en kilómetros
+    R = 6371
 
     lat1_rad = math.radians(lat1)
     lon1_rad = math.radians(lon1)
@@ -87,8 +89,6 @@ def haversine(lat1, lon1, lat2, lon2):
     distance = R * c
     return distance
 
-# Comandos del bot
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 ¡Bienvenido al bot de precios de gasolina ⛽!\n\n"
@@ -97,7 +97,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def precio(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # ¡Aquí está el cambio!
     await update.message.reply_text("📍 ¿Qué ciudad quieres consultar? O si lo prefieres, ¡envíame tu ubicación actual!")
     return ESPERANDO_CIUDAD
 
